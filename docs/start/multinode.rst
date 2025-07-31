@@ -88,7 +88,9 @@ We will use skypilot on gcp in this example. `install skypilot <https://docs.sky
 
 Step 2: Prepare dataset
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-.. code:: bash
+
+.. code-block:: bash
+
    git clone https://github.com/volcengine/verl.git
    cd examples/data_preprocess
    python3 gsm8k.py --local_dir ~/data/gsm8k
@@ -212,6 +214,7 @@ Step 3: Submit job to skypilot
 
 
 .. code-block:: bash
+
     sky launch -c ray-verl-cluster verl-cluster.yml -d
     # see the logs when print  View logs: sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
     sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
@@ -241,6 +244,7 @@ We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
 **See Saved model**
 
 .. code-block:: bash
+
     # login the head node
     ssh ray-verl-cluster
     # see the log find the saved model path
