@@ -127,7 +127,7 @@ Step 3: Submit a job with SkyPilot
    file_mounts:
      # Remote path (relative to remote user's home directory): Local path
      # /remote/dir1/file: /local/dir1/file
-     data/gsm8k: /home/clark/data/gsm8k
+     data/gsm8k: ~/data/gsm8k
 
    # --------------- Environment Setup (setup) ---------------
    # Commands run on each node of the remote cluster to set up the environment (e.g., install dependencies). These are run directly inside Docker.
@@ -160,8 +160,11 @@ Step 3: Submit a job with SkyPilot
              --dashboard-host=0.0.0.0 \
              --dashboard-port=8265
 
-       # Wait for Ray to finish starting.
-       sleep 20 # Increase waiting time to ensure cluster stability and other nodes join.
+       # Wait for all worker nodes to join the cluster.
+       while [ $(ray nodes | grep NODE_ID | wc -l) -lt $num_nodes ]; do
+         echo "Waiting for all nodes to join... ($(ray nodes | grep NODE_ID | wc -l)/$num_nodes)"
+         sleep 5
+       done
 
        # Head node executes the training script.
        echo "Executing training script on head node..."
@@ -216,8 +219,8 @@ Step 3: Submit a job with SkyPilot
 .. code-block:: bash
 
     sky launch -c ray-verl-cluster verl-cluster.yml -d
-    # see the logs when print  View logs: sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
-    sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
+    # View logs with the cluster name. The 'sky launch' command will also print the exact command to use.
+    sky logs ray-verl-cluster
 
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/submit_verl_job.png?raw=true
 
@@ -247,9 +250,10 @@ We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
 
     # login the head node
     ssh ray-verl-cluster
-    # see the log find the saved model path
-    cd /root/sky_workdir/checkpoints/verl_examples/gsm8k/global_step_58/actor/model_world_size_2_rank_1.pt
-    ls -l
+    # The global step will vary. Find the correct path from the training logs.
+    cd /root/sky_workdir/checkpoints/verl_examples/gsm8k/
+    # Then list contents to find the checkpoint, e.g.:
+    ls -R .
 
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/saved_model.png?raw=true
 
