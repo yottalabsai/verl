@@ -64,12 +64,12 @@ Submit job to ray cluster
 .. image:: https://github.com/eric-haibin-lin/verl-community/blob/main/docs/ray/job.png?raw=true
 .. image:: https://github.com/eric-haibin-lin/verl-community/blob/main/docs/ray/job_detail.png?raw=true
 
-Skypilot
+SkyPilot
 -----
 
-Step 1: Set up skypilot
+Step 1: Setup SkyPilot
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We will use skypilot on gcp in this example. `install skypilot <https://docs.skypilot.co/en/latest/getting-started/installation.html>`_
+SkyPilot can support different clouds, here we use GCP as example. `install skypilot <https://docs.skypilot.co/en/latest/getting-started/installation.html>`_
 
 .. code-block:: bash
 
@@ -80,7 +80,7 @@ We will use skypilot on gcp in this example. `install skypilot <https://docs.sky
     conda install -c conda-forge google-cloud-sdk
     gcloud init
 
-    # Run this if you don't have a credentials file.
+    # Run this if you don't have a credential file.
     # This will generate ~/.config/gcloud/application_default_credentials.json.
     gcloud auth application-default login
 
@@ -96,7 +96,7 @@ Step 2: Prepare dataset
    python3 gsm8k.py --local_dir ~/data/gsm8k
 
 
-Step 3: Submit job to skypilot
+Step 3: Submit a job with SkyPilot
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 1. Create a ``verl-cluster.yml`` with the following content:
 
@@ -221,11 +221,11 @@ Step 3: Submit job to skypilot
 
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/submit_verl_job.png?raw=true
 
-**See the Cluster on the GCP**
+**Check the cluster on GCP**
 
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/gcp_instances.png?raw=true
 
-**See the Cluster on the RAY Dashboard**
+**Check Ray Dashboard**
 
 We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
 
@@ -233,7 +233,7 @@ We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/ray_dashboard_jobs.png?raw=true
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/ray_dashboard_cluster.png?raw=true
 
-**See the Log with Skypilot API**
+**Check the log of Ray cluster**
 
 .. parsed-literal:: sky logs ray-verl-cluster 1
 
@@ -241,7 +241,7 @@ We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/running_job_1.png?raw=true
 .. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/finished.png?raw=true
 
-**See Saved model**
+**Check the checkpoint of model**
 
 .. code-block:: bash
 
