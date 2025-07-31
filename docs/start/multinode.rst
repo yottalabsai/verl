@@ -64,6 +64,195 @@ Submit job to ray cluster
 .. image:: https://github.com/eric-haibin-lin/verl-community/blob/main/docs/ray/job.png?raw=true
 .. image:: https://github.com/eric-haibin-lin/verl-community/blob/main/docs/ray/job_detail.png?raw=true
 
+SkyPilot
+-----
+
+Step 1: Setup SkyPilot
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+SkyPilot can support different clouds, here we use GCP as example. `install skypilot <https://docs.skypilot.co/en/latest/getting-started/installation.html>`_
+
+.. code-block:: bash
+
+    conda create -y -n sky python=3.10
+    conda activate sky
+    pip install "skypilot[gcp]"
+
+    conda install -c conda-forge google-cloud-sdk
+    gcloud init
+
+    # Run this if you don't have a credential file.
+    # This will generate ~/.config/gcloud/application_default_credentials.json.
+    gcloud auth application-default login
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/setup_skypilot.png?raw=true
+
+Step 2: Prepare dataset
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+   git clone https://github.com/volcengine/verl.git
+   cd examples/data_preprocess
+   python3 gsm8k.py --local_dir ~/data/gsm8k
+
+
+Step 3: Submit a job with SkyPilot
+~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Create a ``verl-cluster.yml`` with the following content:
+
+.. parsed-literal:: workdir: .  will sync all the data to the remote cluster. so put your yaml in a separate directory.
+ WANDB_API_KEY: <replace with your wandb api key>
+
+.. code-block:: yaml
+
+   resources:
+     accelerators: L4:1 # every node has 1 L4 GPU
+     image_id: docker:verlai/verl:base-verl0.5-cu126-cudnn9.8-torch2.7.0-fa2.7.4
+     memory: 64+        # every node has 64 GB memory
+
+   num_nodes: 2         # cluster size
+
+   # --------------- Work Directory Synchronization (workdir) ---------------
+   # Defines the local working directory to be synchronized to the remote cluster.
+   # Here, '.' means synchronizing the directory where the sky submit command is currently run.
+   workdir: .
+
+   # --------------- (envs) ---------------
+   envs:
+     ## your wandb api key ##
+     WANDB_API_KEY: <replace with your wandb api key>
+
+   # --------------- File Mounts/Data Upload (file_mounts) ---------------
+   # If your dataset (gsm8k folder) is local, it needs to be uploaded to the remote cluster.
+   file_mounts:
+     # Remote path (relative to remote user's home directory): Local path
+     # /remote/dir1/file: /local/dir1/file
+     data/gsm8k: /home/clark/data/gsm8k
+
+   # --------------- Environment Setup (setup) ---------------
+   # Commands run on each node of the remote cluster to set up the environment (e.g., install dependencies). These are run directly inside Docker.
+   setup: |
+     rm -rf verl
+     git clone https://github.com/volcengine/verl.git
+     cd verl
+     pip3 install -v -e .[vllm]
+
+   # --------------- Run Command (run) ---------------
+   # The actual task commands to be executed on the remote cluster.
+   # This script will first start the Ray cluster (different ray start commands are executed on Head and Worker nodes).
+   # Then, your training script will only be run on the Head node (SKYPILOT_NODE_RANK == 0).
+   run: |
+     # Get the Head node's IP and total number of nodes (environment variables injected by SkyPilot).
+     head_ip=`echo "$SKYPILOT_NODE_IPS" | head -n1`
+     num_nodes=`echo "$SKYPILOT_NODE_IPS" | wc -l` # Here num_nodes should be equal to 2.
+
+     # login wandb
+     python3 -c "import wandb; wandb.login(relogin=True, key='$WANDB_API_KEY')"
+
+     # Start Ray based on node role (Head=0, Worker>0).
+     # This logic is a standard Ray cluster startup script.
+     if [ "$SKYPILOT_NODE_RANK" == "0" ]; then
+       # Head node starts Ray Head.
+       echo "Starting Ray head node..."
+       # Check if a Ray Head is already running to avoid duplicate starts.
+       ps aux | grep ray | grep 6379 &> /dev/null ||  ray start --head --disable-usage-stats \
+             --port=6379 \
+             --dashboard-host=0.0.0.0 \
+             --dashboard-port=8265
+
+       # Wait for Ray to finish starting.
+       sleep 20 # Increase waiting time to ensure cluster stability and other nodes join.
+
+       # Head node executes the training script.
+       echo "Executing training script on head node..."
+
+       python3 -m verl.trainer.main_ppo \
+        data.train_files=data/gsm8k/train.parquet \
+        data.val_files=data/gsm8k/test.parquet \
+        data.train_batch_size=256 \
+        data.max_prompt_length=512 \
+        data.max_response_length=256 \
+        actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+        actor_rollout_ref.actor.optim.lr=1e-6 \
+        actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+        actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
+        actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+        actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+        actor_rollout_ref.rollout.name=vllm \
+        actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
+        actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+        critic.optim.lr=1e-5 \
+        critic.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+        critic.ppo_micro_batch_size_per_gpu=4 \
+        algorithm.kl_ctrl.kl_coef=0.001 \
+        trainer.logger=['console','wandb'] \
+        trainer.val_before_train=False \
+        trainer.default_hdfs_dir=null \
+        trainer.n_gpus_per_node=1 \
+        trainer.nnodes=2 \
+        trainer.save_freq=20 \
+        trainer.test_freq=20 \
+        trainer.total_epochs=2 \
+        trainer.project_name=verl_examples \
+        trainer.experiment_name=experiment_name_gsm8k
+
+     else
+       # Wait for Ray Head to start.
+       sleep 10 # Increase waiting time to ensure Head finishes starting.
+       # Worker node starts Ray Worker.
+       echo "Starting Ray worker node..."
+
+       # Check if a Ray Worker is already running to avoid duplicate starts.
+       ps aux | grep ray | grep $head_ip:6379 &> /dev/null || ray start --address $head_ip:6379 --disable-usage-stats
+
+       # Add sleep to after `ray start` to give ray enough time to daemonize
+       sleep 5 # Ensure Worker successfully connects to Head.
+     fi
+
+     # No commands are added to the Worker node here; the Worker's main task is to start Ray and wait for the Head node to assign tasks.
+     echo "Node setup and Ray start script finished for rank $SKYPILOT_NODE_RANK."
+
+
+.. code-block:: bash
+
+    sky launch -c ray-verl-cluster verl-cluster.yml -d
+    # see the logs when print  View logs: sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
+    sky api logs -l sky-2025-07-31-15-45-07-419552/provision.log
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/submit_verl_job.png?raw=true
+
+**Check the cluster on GCP**
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/gcp_instances.png?raw=true
+
+**Check Ray Dashboard**
+
+We can see the cluster on the RAY Dashboard with the gcp head node publicIp:8265
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/ray_dashboard_overview.png?raw=true
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/ray_dashboard_jobs.png?raw=true
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/ray_dashboard_cluster.png?raw=true
+
+**Check the log of Ray cluster**
+
+.. parsed-literal:: sky logs ray-verl-cluster 1
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/running_job.png?raw=true
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/running_job_1.png?raw=true
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/finished.png?raw=true
+
+**Check the checkpoint of model**
+
+.. code-block:: bash
+
+    # login the head node
+    ssh ray-verl-cluster
+    # see the log find the saved model path
+    cd /root/sky_workdir/checkpoints/verl_examples/gsm8k/global_step_58/actor/model_world_size_2_rank_1.pt
+    ls -l
+
+.. image:: https://github.com/yottalabsai/open-source/blob/main/static/verl/saved_model.png?raw=true
+
 
 Slurm
 -----
