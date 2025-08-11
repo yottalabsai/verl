@@ -51,9 +51,12 @@ class ToolAgentLoop(AgentLoopBase):
         cls.tool_parser = ToolParser.get_tool_parser(config.actor_rollout_ref.rollout.multi_turn.format, cls.tokenizer)
         print(f"Initialized tools: {cls.tools}")
 
+        cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
         cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
         cls.response_length = config.actor_rollout_ref.rollout.response_length
-        cls.system_prompt = tokenizer.apply_chat_template([{}], add_generation_prompt=False, tokenize=True)
+        cls.system_prompt = tokenizer.apply_chat_template(
+            [{}], add_generation_prompt=False, tokenize=True, **cls.apply_chat_template_kwargs
+        )
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -63,10 +66,15 @@ class ToolAgentLoop(AgentLoopBase):
         prompt_ids = await self.loop.run_in_executor(
             None,
             lambda: self.tokenizer.apply_chat_template(
-                messages, tools=self.tool_schemas, add_generation_prompt=True, tokenize=True
+                messages,
+                tools=self.tool_schemas,
+                add_generation_prompt=True,
+                tokenize=True,
+                **self.apply_chat_template_kwargs,
             ),
         )
         response_mask = []
+        tools_kwargs = kwargs.get("tools_kwargs", {})
 
         user_turns, assistant_turns = 0, 0
         while True:
@@ -98,7 +106,7 @@ class ToolAgentLoop(AgentLoopBase):
             # call tools
             tasks = []
             for tool_call in tool_calls[: self.max_parallel_calls]:
-                tasks.append(self._call_tool(tool_call))
+                tasks.append(self._call_tool(tool_call, tools_kwargs))
             with simple_timer("tool_calls", metrics):
                 tool_responses = await asyncio.gather(*tasks)
             if any(isinstance(item, Exception) for item in tool_responses):
@@ -108,7 +116,7 @@ class ToolAgentLoop(AgentLoopBase):
             tool_response_ids = await self.loop.run_in_executor(
                 None,
                 lambda messages=tool_responses: self.tokenizer.apply_chat_template(
-                    messages, add_generation_prompt=True, tokenize=True
+                    messages, add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
                 ),
             )
             tool_response_ids = tool_response_ids[len(self.system_prompt) :]
@@ -134,7 +142,7 @@ class ToolAgentLoop(AgentLoopBase):
         )
         return output
 
-    async def _call_tool(self, tool_call: FunctionCall) -> dict[str, str]:
+    async def _call_tool(self, tool_call: FunctionCall, tools_kwargs: dict[str, Any]) -> dict[str, str]:
         """Call tool and return tool response."""
         tool, instance_id = None, None
         try:
@@ -142,9 +150,9 @@ class ToolAgentLoop(AgentLoopBase):
             tool_name = tool_call.name
             tool_args = json.loads(tool_call.arguments)
             tool = self.tools[tool_name]
-
-            instance_id = await tool.create()
-            tool_response, _, _ = await tool.execute(instance_id, tool_args)
+            kwargs = tools_kwargs.get(tool_name, {})
+            instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
+            tool_execution_response, _, _ = await tool.execute(instance_id, tool_args)
         except Exception as e:
             logger.exception(f"Error when executing tool: {e}")
             return e
@@ -152,16 +160,17 @@ class ToolAgentLoop(AgentLoopBase):
             if tool and instance_id:
                 await tool.release(instance_id)
 
-        if len(tool_response) > self.max_tool_response_length:
+        tool_response_text = tool_execution_response.text
+        if tool_response_text and len(tool_response_text) > self.max_tool_response_length:
             if self.tool_response_truncate_side == "left":
-                tool_response = tool_response[: self.max_tool_response_length] + "...(truncated)"
+                tool_response_text = tool_response_text[: self.max_tool_response_length] + "...(truncated)"
             elif self.tool_response_truncate_side == "right":
-                tool_response = "(truncated)..." + tool_response[-self.max_tool_response_length :]
+                tool_response_text = "(truncated)..." + tool_response_text[-self.max_tool_response_length :]
             else:
                 length = self.max_tool_response_length // 2
-                tool_response = tool_response[:length] + "...(truncated)..." + tool_response[-length:]
+                tool_response_text = tool_response_text[:length] + "...(truncated)..." + tool_response_text[-length:]
 
         return {
             "role": "tool",
-            "content": tool_response,
+            "content": tool_response_text,
         }
